@@ -1,17 +1,13 @@
-from logging import error
-import posixpath
-from sys import meta_path
-from flask import Blueprint, render_template, request, jsonify, abort
-from flask.helpers import flash
-from flask_login import login_required, current_user
-from sqlalchemy.sql.functions import user
-from werkzeug.utils import redirect
-from . import db
-from .models import User, Donation
 import json
-from dateutil import parser
-from sqlalchemy import func, select, column, desc, text
 
+from dateutil import parser
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
+from jinja2 import TemplateNotFound
+from sqlalchemy import desc, func
+
+from . import db
+from .models import Donation, User
 
 views = Blueprint("views", __name__, template_folder="templates")
 
@@ -23,7 +19,10 @@ def index():
 
 @views.route("/mission")
 def mission():
-    return render_template("vision.html")
+    try:
+        return render_template("vision.html")
+    except TemplateNotFound:  # the page was never written; 404 rather than a server error
+        abort(404)
 
 
 @views.route("/subscribe")
@@ -35,26 +34,29 @@ def subscribe():
 @login_required
 def configureDashboard():
     if request.method == "POST":
-
         organisation = request.form.get("organisation-name")
-
-        if request.form.get("donation-amount").isdigit():
-            amount = request.form.get("donation-amount")
-        else:
-            flash("Please enter a valid digit", error)
-
+        amount = request.form.get("donation-amount", "")
         description = request.form.get("donation-description")
-        date_donated = parser.parse(request.form.get("donation-date"))
+        try:
+            date_donated = parser.parse(request.form.get("donation-date", ""))
+        except (ValueError, OverflowError):
+            date_donated = None
 
-        new_donation = Donation(
-            amount=amount,
-            description=description,
-            organisation=organisation,
-            date_donated=date_donated,
-            user_id=current_user.id,
-        )
-        db.session.add(new_donation)
-        db.session.commit()
+        if not amount.isdigit():
+            flash("Please enter a valid digit", category="error")
+        elif date_donated is None:
+            flash("Please enter a valid date", category="error")
+        else:
+            db.session.add(
+                Donation(
+                    amount=int(amount),
+                    description=description,
+                    organisation=organisation,
+                    date_donated=date_donated,
+                    user_id=current_user.id,
+                )
+            )
+            db.session.commit()
 
     total_donations = db.session.query(
         db.func.sum(Donation.amount).filter(Donation.user_id == current_user.id)
@@ -74,22 +76,15 @@ def configureDashboard():
     )
 
 
-@views.route("/delete/<int:id>")
+@views.route("/delete/<int:id>", methods=["POST"])
 @login_required
 def deleteDonation(id):
-
-    donation_to_delete = Donation.query.get_or_404(id)
-    if donation_to_delete:
-        if donation_to_delete.user_id == current_user.id:
-            try:
-                db.session.delete(donation_to_delete)
-                db.session.commit()
-                return redirect("/dashboard/configure")
-
-            except:
-                return "There was a problem deleting that donation"
-
-    return "There was a problem deleting that donation"
+    donation = db.get_or_404(Donation, id)
+    if donation.user_id != current_user.id:
+        abort(403)
+    db.session.delete(donation)
+    db.session.commit()
+    return redirect(url_for("views.configureDashboard"))
 
 
 @views.route("/dashboard/public/<int:id>")
@@ -97,7 +92,7 @@ def publicdashboard(id):
 
     # user = db.session.query(User).filter(User.id==id).all()
 
-    user = User.query.get_or_404(id)
+    user = db.get_or_404(User, id)
     total_donations = db.session.query(
         db.func.sum(Donation.amount).filter(Donation.user_id == id)
     ).scalar()
@@ -115,13 +110,12 @@ def publicdashboard(id):
         .all()
     )
 
+    total = func.sum(Donation.amount).label("Total")
     sum_donations = (
-        db.session.query(
-            User.first_name, Donation.user_id, func.sum(Donation.amount).label("Total")
-        )
+        db.session.query(User.first_name, Donation.user_id, total)
         .join(User, Donation.user_id == User.id)
-        .group_by(Donation.user_id)
-        .order_by(desc(text("Total")))
+        .group_by(Donation.user_id, User.first_name)
+        .order_by(desc(total))
         .all()
     )
 

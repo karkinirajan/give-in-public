@@ -1,0 +1,29 @@
+[project]
+name = "give-in-public"
+version = "1.0.0"
+description = "Flask app where people record and publicly share their charitable donations."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flask>=3.1",
+    "flask-sqlalchemy>=3.1",
+    "flask-login>=0.6",
+    "flask-wtf>=1.2",
+    "python-dateutil>=2.9",
+    "gunicorn>=26,<27",
+    "psycopg[binary]>=3.3,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["Website/static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

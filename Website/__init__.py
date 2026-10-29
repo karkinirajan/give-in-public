@@ -1,43 +1,62 @@
-from flask import Flask 
-from flask_sqlalchemy import SQLAlchemy
-from os import path
-from flask_login import LoginManager, login_manager
 import os
 
+from flask import Flask
+from flask_login import LoginManager
+from flask_sqlalchemy import SQLAlchemy
+from flask_wtf.csrf import CSRFProtect
+
 db = SQLAlchemy()
-DB_NAME = "database.db"
+csrf = CSRFProtect()
+login_manager = LoginManager()
+login_manager.login_view = "auth.login"
 
-def create_app():
-    app=Flask(__name__)
-    app.config['SECRET_KEY'] = 'pIphvb0IDXOoPZO2XFLS'
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://cviowhzivhgjeq:f3c7ef52185515b1af6b6b5c5ee7f99c8b9d166ca4416743b0512b2557c569aa@ec2-54-205-232-84.compute-1.amazonaws.com:5432/dbcnhlqqfu9jl7'
+
+def _database_uri() -> str:
+    """DATABASE_URL (Heroku style `postgres://` is accepted), or a local SQLite file."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return "sqlite:///database.db"
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
+def create_app(config: dict | None = None) -> Flask:
+    app = Flask(__name__)
+
+    secret_key = os.environ.get("SECRET_KEY")
+    app.config.update(
+        SECRET_KEY=secret_key,
+        SQLALCHEMY_DATABASE_URI=_database_uri(),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "").lower()
+        in {"1", "true", "yes"},
+    )
+    if config:
+        app.config.update(config)
+    if not app.config.get("SECRET_KEY"):
+        raise RuntimeError("Set the SECRET_KEY environment variable before starting the app.")
+
     db.init_app(app)
-
-    
-    from .views import views
-    from .auth import auth
-
-    app.register_blueprint(views, url_prefix='/')
-    app.register_blueprint(auth, url_prefix='/')
-
-    from .models import User, Donation
-
-
-    create_database(app)
-
-    login_manager = LoginManager()
-    login_manager.login_view = 'auth.login'
+    csrf.init_app(app)
     login_manager.init_app(app)
 
-    @login_manager.user_loader 
-    def load_user(id):
-        return User.query.get(int(id))
+    from .auth import auth
+    from .models import User
+    from .views import views
 
-    return app 
+    app.register_blueprint(views, url_prefix="/")
+    app.register_blueprint(auth, url_prefix="/")
 
-def create_database(app):
-    if not path.exists('website/' + DB_NAME):
-        db.create_all(app=app)
-        print('Created Database!')
+    @login_manager.user_loader
+    def load_user(user_id):
+        return db.session.get(User, int(user_id))
 
-print("Test")
+    # No migration tooling yet: create any missing tables on startup.
+    with app.app_context():
+        db.create_all()
+
+    return app
